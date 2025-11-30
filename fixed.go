@@ -279,6 +279,7 @@ func (f Fixed) Round(n int) Fixed {
 	}
 }
 
+// Ceil returns f rounded up to n decimal places
 func (f Fixed) Ceil(n int) Fixed {
 	f0 := f.Round(n)
 	if f0.Cmp(f) >= 0 {
@@ -292,6 +293,7 @@ func (f Fixed) Ceil(n int) Fixed {
 	return f0.Add(NewI(adj, uint(n)))
 }
 
+// Floor returns f rounded down to n decimal places
 func (f Fixed) Floor(n int) Fixed {
 	f0 := f.Round(n)
 	if f0.Cmp(f) <= 0 {
