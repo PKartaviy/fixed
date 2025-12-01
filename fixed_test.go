@@ -545,6 +545,91 @@ func TestRound(t *testing.T) {
 		t.Error("should be equal", f1, "2234.57")
 	}
 
+	f0 = NewS("123.456")
+	f1 = f0.Round(-1)
+
+	if f1.String() != "120" {
+		t.Error("should be equal", f1, "120")
+	}
+
+	f1 = f0.Round(-2)
+
+	if f1.String() != "100" {
+		t.Error("should be equal", f1, "100")
+	}
+
+	f0 = NewS("125.456")
+	f1 = f0.Round(-1)
+
+	if f1.String() != "130" {
+		t.Error("should be equal", f1, "130")
+	}
+}
+
+func TestFloorCeil(t *testing.T) {
+	f := NewS("1.5")
+	if f.Floor(0).String() != "1" {
+		t.Error("Floor(1.5, 0) should be 1, got", f.Floor(0))
+	}
+	if f.Ceil(0).String() != "2" {
+		t.Error("Ceil(1.5, 0) should be 2, got", f.Ceil(0))
+	}
+
+	f = NewS("1.234")
+	if f.Floor(2).String() != "1.23" {
+		t.Error("Floor(1.234, 2) should be 1.23, got", f.Floor(2))
+	}
+	if f.Ceil(2).String() != "1.24" {
+		t.Error("Ceil(1.234, 2) should be 1.24, got", f.Ceil(2))
+	}
+
+	f = NewS("-1.5")
+	if f.Floor(0).String() != "-2" {
+		t.Error("Floor(-1.5, 0) should be -2, got", f.Floor(0))
+	}
+	if f.Ceil(0).String() != "-1" {
+		t.Error("Ceil(-1.5, 0) should be -1, got", f.Ceil(0))
+	}
+
+	f = NewS("-1.234")
+	if f.Floor(2).String() != "-1.24" {
+		t.Error("Floor(-1.234, 2) should be -1.24, got", f.Floor(2))
+	}
+	if f.Ceil(2).String() != "-1.23" {
+		t.Error("Ceil(-1.234, 2) should be -1.23, got", f.Ceil(2))
+	}
+
+	f = NewS("123.456")
+	if f.Floor(-1).String() != "120" {
+		t.Error("Floor(123.456, -1) should be 120, got", f.Floor(-1))
+	}
+	if f.Ceil(-1).String() != "130" {
+		t.Error("Ceil(123.456, -1) should be 130, got", f.Ceil(-1))
+	}
+
+	f = NewS("1.2")
+	if f.Floor(1).String() != "1.2" {
+		t.Error("Floor(1.2, 1) should be 1.2, got", f.Floor(1))
+	}
+	if f.Ceil(1).String() != "1.2" {
+		t.Error("Ceil(1.2, 1) should be 1.2, got", f.Ceil(1))
+	}
+
+	f = NewS("0")
+	if f.Floor(0).String() != "0" {
+		t.Error("Floor(0, 0) should be 0, got", f.Floor(0))
+	}
+	if f.Ceil(0).String() != "0" {
+		t.Error("Ceil(0, 0) should be 0, got", f.Ceil(0))
+	}
+
+	f = NewS("NaN")
+	if !f.Floor(0).IsNaN() {
+		t.Error("Floor(NaN, 0) should be NaN, got", f.Floor(0))
+	}
+	if !f.Ceil(0).IsNaN() {
+		t.Error("Ceil(NaN, 0) should be NaN, got", f.Ceil(0))
+	}
 }
 
 func TestEncodeDecode(t *testing.T) {

@@ -251,18 +251,60 @@ func (f Fixed) Round(n int) Fixed {
 	}
 
 	fraction := f.fp % scale
-	f0 := fraction / int64(math.Pow10(nPlaces-n-1))
-	digit := abs(f0 % 10)
-	f0 = (f0 / 10)
-	if digit >= 5 {
-		f0 += 1 * sign(f.fp)
-	}
-	f0 = f0 * int64(math.Pow10(nPlaces-n))
-
 	intpart := f.fp - fraction
-	fp := intpart + f0
 
-	return Fixed{fp: fp}
+	if n >= 0 {
+		f0 := fraction / int64(math.Pow10(nPlaces-n-1))
+		digit := abs(f0 % 10)
+		f0 = (f0 / 10)
+		if digit >= 5 {
+			f0 += 1 * sign(f.fp)
+		}
+		f0 = f0 * int64(math.Pow10(nPlaces-n))
+
+		fp := intpart + f0
+
+		return Fixed{fp: fp}
+
+	} else {
+		f0 := intpart / int64(math.Pow10(nPlaces-n-1))
+		digit := abs(f0 % 10)
+		f0 = (f0 / 10)
+		if digit >= 5 {
+			f0 += 1 * sign(f.fp)
+		}
+		f0 = f0 * int64(math.Pow10(nPlaces-n))
+
+		return Fixed{fp: f0}
+	}
+}
+
+// Ceil returns f rounded up to n decimal places
+func (f Fixed) Ceil(n int) Fixed {
+	f0 := f.Round(n)
+	if f0.Cmp(f) >= 0 {
+		return f0
+	}
+	adj := int64(1)
+	if n < 0 {
+		adj = adj * int64(math.Pow10(-n))
+		n = 0
+	}
+	return f0.Add(NewI(adj, uint(n)))
+}
+
+// Floor returns f rounded down to n decimal places
+func (f Fixed) Floor(n int) Fixed {
+	f0 := f.Round(n)
+	if f0.Cmp(f) <= 0 {
+		return f0
+	}
+	adj := int64(-1)
+	if n < 0 {
+		adj = adj * int64(math.Pow10(-n))
+		n = 0
+	}
+	return f0.Add(NewI(adj, uint(n)))
 }
 
 // Equal returns true if the f == f0. If either operand is NaN, false is returned. Use IsNaN() to test for NaN
