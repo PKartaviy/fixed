@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	. "github.com/robaho/fixed"
+	. "github.com/PKartaviy/fixed"
 )
 
 func TestBasic(t *testing.T) {

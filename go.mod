@@ -1,4 +1,4 @@
-module github.com/robaho/fixed
+module github.com/PKartaviy/fixed
 
 go 1.21.5
 
