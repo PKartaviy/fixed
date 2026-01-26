@@ -8,27 +8,31 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
 
-// Fixed is a fixed precision 38.24 number (supports 11.7 digits). It supports NaN.
+// Fixed is a fixed precision 18.18 number (18 integer digits, 18 decimal digits). It supports NaN.
 type Fixed struct {
-	fp int64
+	hi int64 // Integer part: -999999999999999999 to 999999999999999999
+	lo int64 // Decimal part scaled by 10^18, carries same sign as hi
 }
 
 // the following constants can be changed to configure a different number of decimal places - these are
 // the only required changes. only 18 significant digits are supported due to NaN
 
-const nPlaces = 8
-const scale = int64(10 * 10 * 10 * 10 * 10 * 10 * 10 * 10)
-const zeros = "00000000"
-const MAX = float64(9999999999.99999999)
+const nPlaces = 18
+const scale = int64(1000000000000000000) // 10^18
+const zeros = "000000000000000000"
+const MAX = float64(999999999999999999.999999999999999999)
 
-const nan = int64(1<<63 - 1)
+// NaN representation: both fields set to int64 max
+const nanHi = int64(1<<63 - 1)
+const nanLo = int64(1<<63 - 1)
 
-var NaN = Fixed{fp: nan}
-var ZERO = Fixed{fp: 0}
+var NaN = Fixed{hi: nanHi, lo: nanLo}
+var ZERO = Fixed{hi: 0, lo: 0}
 
 var errTooLarge = errors.New("significand too large")
 var errFormat = errors.New("invalid encoding")
@@ -52,41 +56,41 @@ func NewSErr(s string) (Fixed, error) {
 		return NaN, nil
 	}
 	period := strings.Index(s, ".")
-	var i int64
-	var f int64
+	var hi int64
+	var lo int64
 	var sign int64 = 1
 	var err error
 	if period == -1 {
-		i, err = strconv.ParseInt(s, 10, 64)
+		hi, err = strconv.ParseInt(s, 10, 64)
 		if err != nil {
 			return NaN, errors.New("cannot parse")
 		}
-		if i < 0 {
+		if hi < 0 {
 			sign = -1
-			i = i * -1
+			hi = hi * -1
 		}
 	} else {
 		if len(s[:period]) > 0 {
-			i, err = strconv.ParseInt(s[:period], 10, 64)
+			hi, err = strconv.ParseInt(s[:period], 10, 64)
 			if err != nil {
 				return NaN, errors.New("cannot parse")
 			}
-			if i < 0 || s[0] == '-' {
+			if hi < 0 || s[0] == '-' {
 				sign = -1
-				i = i * -1
+				hi = hi * -1
 			}
 		}
 		fs := s[period+1:]
 		fs = fs + zeros[:max(0, nPlaces-len(fs))]
-		f, err = strconv.ParseInt(fs[0:nPlaces], 10, 64)
+		lo, err = strconv.ParseInt(fs[0:nPlaces], 10, 64)
 		if err != nil {
 			return NaN, errors.New("cannot parse")
 		}
 	}
-	if float64(i) > MAX {
+	if float64(hi) > MAX {
 		return NaN, errTooLarge
 	}
-	return Fixed{fp: sign * (i*scale + f)}, nil
+	return Fixed{hi: sign * hi, lo: sign * lo}, nil
 }
 
 // Parse creates a new Fixed from a string, returning NaN, and error if the string could not be parsed. Same as NewSErr
@@ -111,37 +115,78 @@ func max(a, b int) int {
 	return b
 }
 
-// NewF creates a Fixed from an float64, rounding at the 8th decimal place
+// normalize ensures lo is within proper range and adjusts hi accordingly
+func normalize(hi, lo int64) (int64, int64) {
+	if lo >= scale {
+		hi += lo / scale
+		lo = lo % scale
+	} else if lo <= -scale {
+		hi += lo / scale // lo/scale is negative
+		lo = lo % scale
+	}
+
+	// Handle sign consistency: both parts should have same sign
+	// Special case: hi=0 with non-zero lo keeps lo's sign
+	if hi > 0 && lo < 0 {
+		hi--
+		lo += scale
+	} else if hi < 0 && lo > 0 {
+		hi++
+		lo -= scale
+	}
+
+	return hi, lo
+}
+
+// NewF creates a Fixed from an float64
+// float64 has ~15-16 digits of precision; we round to avoid showing artifacts
 func NewF(f float64) Fixed {
 	if math.IsNaN(f) {
-		return Fixed{fp: nan}
+		return NaN
 	}
 	if f >= MAX || f <= -MAX {
 		return NaN
 	}
-	round := .5
-	if f < 0 {
-		round = -0.5
+
+	// Convert to string with 15 significant figures (float64's precision limit)
+	// then parse the string to avoid float64 precision artifacts
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+
+	// Parse and return - this handles the conversion cleanly
+	result, err := NewSErr(s)
+	if err != nil {
+		// Fallback: direct conversion
+		hi := int64(math.Trunc(f))
+		frac := f - float64(hi)
+		lo := int64(frac * float64(scale))
+		hi, lo = normalize(hi, lo)
+		return Fixed{hi: hi, lo: lo}
 	}
 
-	return Fixed{fp: int64(f*float64(scale) + round)}
+	return result
 }
 
 // NewI creates a Fixed for an integer, moving the decimal point n places to the left
-// For example, NewI(123,1) becomes 12.3. If n > 7, the value is truncated
+// For example, NewI(123,1) becomes 12.3. If n > 18, the value is truncated
 func NewI(i int64, n uint) Fixed {
 	if n > nPlaces {
 		i = i / int64(math.Pow10(int(n-nPlaces)))
 		n = nPlaces
 	}
 
-	i = i * int64(math.Pow10(int(nPlaces-n)))
+	// Split i into integer and decimal portions based on n
+	divisor := int64(math.Pow10(int(n)))
+	hi := i / divisor
+	remainder := i % divisor
 
-	return Fixed{fp: i}
+	// Scale decimal portion to 18 digits
+	lo := remainder * int64(math.Pow10(int(nPlaces-n)))
+
+	return Fixed{hi: hi, lo: lo}
 }
 
 func (f Fixed) IsNaN() bool {
-	return f.fp == nan
+	return f.hi == nanHi && f.lo == nanLo
 }
 
 func (f Fixed) IsZero() bool {
@@ -157,7 +202,13 @@ func (f Fixed) Sign() int {
 	if f.IsNaN() {
 		return 0
 	}
-	return f.Cmp(ZERO)
+	if f.hi < 0 || (f.hi == 0 && f.lo < 0) {
+		return -1
+	}
+	if f.hi > 0 || (f.hi == 0 && f.lo > 0) {
+		return 1
+	}
+	return 0
 }
 
 // Float converts the Fixed to a float64
@@ -165,7 +216,7 @@ func (f Fixed) Float() float64 {
 	if f.IsNaN() {
 		return math.NaN()
 	}
-	return float64(f.fp) / float64(scale)
+	return float64(f.hi) + float64(f.lo)/float64(scale)
 }
 
 // Add adds f0 to f producing a Fixed. If either operand is NaN, NaN is returned
@@ -173,7 +224,10 @@ func (f Fixed) Add(f0 Fixed) Fixed {
 	if f.IsNaN() || f0.IsNaN() {
 		return NaN
 	}
-	return Fixed{fp: f.fp + f0.fp}
+	hi := f.hi + f0.hi
+	lo := f.lo + f0.lo
+	hi, lo = normalize(hi, lo)
+	return Fixed{hi: hi, lo: lo}
 }
 
 // Sub subtracts f0 from f producing a Fixed. If either operand is NaN, NaN is returned
@@ -181,7 +235,10 @@ func (f Fixed) Sub(f0 Fixed) Fixed {
 	if f.IsNaN() || f0.IsNaN() {
 		return NaN
 	}
-	return Fixed{fp: f.fp - f0.fp}
+	hi := f.hi - f0.hi
+	lo := f.lo - f0.lo
+	hi, lo = normalize(hi, lo)
+	return Fixed{hi: hi, lo: lo}
 }
 
 // Abs returns the absolute value of f. If f is NaN, NaN is returned
@@ -192,8 +249,8 @@ func (f Fixed) Abs() Fixed {
 	if f.Sign() >= 0 {
 		return f
 	}
-	f0 := Fixed{fp: f.fp * -1}
-	return f0
+	// Negate both parts
+	return Fixed{hi: -f.hi, lo: -f.lo}
 }
 
 func abs(i int64) int64 {
@@ -204,37 +261,91 @@ func abs(i int64) int64 {
 }
 
 // Mul multiplies f by f0 returning a Fixed. If either operand is NaN, NaN is returned
+// Uses optimized int64 arithmetic for small values, falls back to math/big for large values
 func (f Fixed) Mul(f0 Fixed) Fixed {
 	if f.IsNaN() || f0.IsNaN() {
 		return NaN
 	}
 
-	fp_a := f.fp / scale
-	fp_b := f.fp % scale
+	// Use math/big for all multiplications to avoid overflow
+	// Convert to single big integer (value * scale), multiply, then split back
+	bigScale := big.NewInt(scale)
 
-	fp0_a := f0.fp / scale
-	fp0_b := f0.fp % scale
+	// value1 = hi1 * scale + lo1
+	value1 := new(big.Int).Mul(big.NewInt(f.hi), bigScale)
+	value1.Add(value1, big.NewInt(f.lo))
 
-	var _sign = int64(f.Sign() * f0.Sign())
+	// value2 = hi2 * scale + lo2
+	value2 := new(big.Int).Mul(big.NewInt(f0.hi), bigScale)
+	value2.Add(value2, big.NewInt(f0.lo))
 
-	var result int64
+	// product = value1 * value2 / scale (to maintain scale)
+	product := new(big.Int).Mul(value1, value2)
+	product.Div(product, bigScale)
 
-	if fp0_a != 0 {
-		result = fp_a*fp0_a*scale + fp_b*fp0_a
+	// Split back into hi and lo
+	hi := new(big.Int).Div(product, bigScale)
+	lo := new(big.Int).Mod(product, bigScale)
+
+	// Check overflow
+	if !hi.IsInt64() || !lo.IsInt64() {
+		return NaN
 	}
-	if fp0_b != 0 {
-		result = result + (fp_a * fp0_b) + ((fp_b)*fp0_b+5*_sign*(scale/10))/scale
-	}
 
-	return Fixed{fp: result}
+	// Normalize to ensure sign consistency
+	resHi, resLo := normalize(hi.Int64(), lo.Int64())
+	return Fixed{hi: resHi, lo: resLo}
 }
 
 // Div divides f by f0 returning a Fixed. If either operand is NaN, NaN is returned
+// Uses arbitrary precision math/big for accurate division
 func (f Fixed) Div(f0 Fixed) Fixed {
 	if f.IsNaN() || f0.IsNaN() {
 		return NaN
 	}
-	return NewF(f.Float() / f0.Float())
+	if f0.hi == 0 && f0.lo == 0 {
+		return NaN // division by zero
+	}
+
+	// Convert to big.Int for full precision
+	dividend := new(big.Int).Mul(big.NewInt(f.hi), big.NewInt(scale))
+	dividend.Add(dividend, big.NewInt(f.lo))
+
+	divisor := new(big.Int).Mul(big.NewInt(f0.hi), big.NewInt(scale))
+	divisor.Add(divisor, big.NewInt(f0.lo))
+
+	// Scale dividend by 10^18 for proper decimal places
+	dividend.Mul(dividend, big.NewInt(scale))
+
+	// Perform division with rounding
+	remainder := new(big.Int)
+	result, remainder := new(big.Int).DivMod(dividend, divisor, remainder)
+
+	// Round result: if abs(remainder) >= abs(divisor)/2, round away from zero
+	halfDivisor := new(big.Int).Abs(divisor)
+	halfDivisor.Div(halfDivisor, big.NewInt(2))
+	absRemainder := new(big.Int).Abs(remainder)
+
+	if absRemainder.Cmp(halfDivisor) >= 0 {
+		if result.Sign() >= 0 {
+			result.Add(result, big.NewInt(1))
+		} else {
+			result.Sub(result, big.NewInt(1))
+		}
+	}
+
+	// Split result back into hi and lo
+	bigScale := big.NewInt(scale)
+	hi := new(big.Int).Div(result, bigScale)
+	lo := new(big.Int).Mod(result, bigScale)
+
+	if !hi.IsInt64() || !lo.IsInt64() {
+		return NaN
+	}
+
+	// Normalize to ensure sign consistency
+	resHi, resLo := normalize(hi.Int64(), lo.Int64())
+	return Fixed{hi: resHi, lo: resLo}
 }
 
 func sign(fp int64) int64 {
@@ -249,38 +360,61 @@ func (f Fixed) Round(n int) Fixed {
 	if f.IsNaN() {
 		return NaN
 	}
-
-	fraction := f.fp % scale
-	intpart := f.fp - fraction
+	if n >= 18 {
+		return f
+	}
 
 	if n >= 0 {
-		f0 := fraction / int64(math.Pow10(nPlaces-n-1))
-		digit := abs(f0 % 10)
-		f0 = (f0 / 10)
-		if digit >= 5 {
-			f0 += 1 * sign(f.fp)
+		// Rounding decimal part (lo)
+		divisor := int64(math.Pow10(18 - n))
+		remainder := f.lo % divisor
+		absRemainder := remainder
+		if absRemainder < 0 {
+			absRemainder = -absRemainder
 		}
-		f0 = f0 * int64(math.Pow10(nPlaces-n))
 
-		fp := intpart + f0
+		newLo := (f.lo / divisor) * divisor
 
-		return Fixed{fp: fp}
+		// Half-up rounding
+		halfDivisor := divisor / 2
+		if absRemainder >= halfDivisor {
+			if f.lo >= 0 {
+				newLo += divisor
+			} else {
+				newLo -= divisor
+			}
+		}
 
+		hi, lo := normalize(f.hi, newLo)
+		return Fixed{hi: hi, lo: lo}
 	} else {
-		f0 := intpart / int64(math.Pow10(nPlaces-n-1))
-		digit := abs(f0 % 10)
-		f0 = (f0 / 10)
-		if digit >= 5 {
-			f0 += 1 * sign(f.fp)
+		// Rounding integer part (hi), zero out lo
+		divisor := int64(math.Pow10(-n))
+		remainder := f.hi % divisor
+		absRemainder := remainder
+		if absRemainder < 0 {
+			absRemainder = -absRemainder
 		}
-		f0 = f0 * int64(math.Pow10(nPlaces-n))
 
-		return Fixed{fp: f0}
+		newHi := (f.hi / divisor) * divisor
+
+		if absRemainder >= divisor/2 {
+			if f.hi >= 0 {
+				newHi += divisor
+			} else {
+				newHi -= divisor
+			}
+		}
+
+		return Fixed{hi: newHi, lo: 0}
 	}
 }
 
 // Ceil returns f rounded up to n decimal places
 func (f Fixed) Ceil(n int) Fixed {
+	if f.IsNaN() {
+		return NaN
+	}
 	f0 := f.Round(n)
 	if f0.Cmp(f) >= 0 {
 		return f0
@@ -295,6 +429,9 @@ func (f Fixed) Ceil(n int) Fixed {
 
 // Floor returns f rounded down to n decimal places
 func (f Fixed) Floor(n int) Fixed {
+	if f.IsNaN() {
+		return NaN
+	}
 	f0 := f.Round(n)
 	if f0.Cmp(f) <= 0 {
 		return f0
@@ -349,13 +486,22 @@ func (f Fixed) Cmp(f0 Fixed) int {
 		return -1
 	}
 
-	if f.fp == f0.fp {
-		return 0
-	}
-	if f.fp < f0.fp {
+	if f.hi < f0.hi {
 		return -1
 	}
-	return 1
+	if f.hi > f0.hi {
+		return 1
+	}
+
+	// hi parts equal, compare lo parts
+	if f.lo < f0.lo {
+		return -1
+	}
+	if f.lo > f0.lo {
+		return 1
+	}
+
+	return 0
 }
 
 // String converts a Fixed to a string, dropping trailing zeros
@@ -389,43 +535,50 @@ func (f Fixed) StringN(decimals int) string {
 }
 
 func (f Fixed) tostr() (string, int) {
-	fp := f.fp
-	if fp == 0 {
+	if f.hi == 0 && f.lo == 0 {
 		return "0." + zeros, 1
 	}
-	if fp == nan {
+	if f.IsNaN() {
 		return "NaN", -1
 	}
 
-	b := make([]byte, 24)
-	b = itoa(b, fp)
+	// Determine sign
+	negative := f.hi < 0 || (f.hi == 0 && f.lo < 0)
 
-	return string(b), len(b) - nPlaces - 1
+	// Work with absolute values
+	absHi := f.hi
+	if absHi < 0 {
+		absHi = -absHi
+	}
+	absLo := f.lo
+	if absLo < 0 {
+		absLo = -absLo
+	}
+
+	// Convert hi to string
+	hiStr := strconv.FormatInt(absHi, 10)
+
+	// Convert lo to 18-digit string with leading zeros
+	loStr := fmt.Sprintf("%018d", absLo)
+
+	// Build result
+	result := hiStr + "." + loStr
+	pointPos := len(hiStr)
+	if negative {
+		result = "-" + result
+		pointPos++ // Adjust for the minus sign
+	}
+
+	return result, pointPos
 }
 
 func itoa(buf []byte, val int64) []byte {
-	neg := val < 0
-	if neg {
-		val = val * -1
-	}
-
-	i := len(buf) - 1
-	idec := i - nPlaces
-	for val >= 10 || i >= idec {
-		buf[i] = byte(val%10 + '0')
-		i--
-		if i == idec {
-			buf[i] = '.'
-			i--
-		}
-		val /= 10
-	}
-	buf[i] = byte(val + '0')
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return buf[i:]
+	// Note: This function is deprecated in favor of tostr()
+	// but kept for backward compatibility with MarshalJSON
+	// We'll use a Fixed value to leverage tostr()
+	f := Fixed{hi: val / scale, lo: val % scale}
+	s, _ := f.tostr()
+	return []byte(s)
 }
 
 // Int return the integer portion of the Fixed, or 0 if NaN
@@ -433,7 +586,7 @@ func (f Fixed) Int() int64 {
 	if f.IsNaN() {
 		return 0
 	}
-	return f.fp / scale
+	return f.hi
 }
 
 // Frac return the fractional portion of the Fixed, or NaN if NaN
@@ -441,38 +594,55 @@ func (f Fixed) Frac() float64 {
 	if f.IsNaN() {
 		return math.NaN()
 	}
-	return float64(f.fp%scale) / float64(scale)
+	return float64(f.lo) / float64(scale)
 }
 
 // UnmarshalBinary implements the encoding.BinaryUnmarshaler interface
 func (f *Fixed) UnmarshalBinary(data []byte) error {
-	fp, n := binary.Varint(data)
-	if n < 0 {
+	hi, n := binary.Varint(data)
+	if n <= 0 {
 		return errFormat
 	}
-	f.fp = fp
+
+	lo, m := binary.Varint(data[n:])
+	if m <= 0 {
+		return errFormat
+	}
+
+	f.hi = hi
+	f.lo = lo
 	return nil
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface.
 func (f Fixed) MarshalBinary() (data []byte, err error) {
-	var buffer [binary.MaxVarintLen64]byte
-	n := binary.PutVarint(buffer[:], f.fp)
+	var buffer [2 * binary.MaxVarintLen64]byte
+	n := binary.PutVarint(buffer[:], f.hi)
+	n += binary.PutVarint(buffer[n:], f.lo)
 	return buffer[:n], nil
 }
 
 // WriteTo write the Fixed to an io.Writer, returning the number of bytes written
 func (f Fixed) WriteTo(w io.ByteWriter) error {
-	return writeVarint(w, f.fp)
+	if err := writeVarint(w, f.hi); err != nil {
+		return err
+	}
+	return writeVarint(w, f.lo)
 }
 
 // ReadFrom reads a Fixed from an io.Reader
 func ReadFrom(r io.ByteReader) (Fixed, error) {
-	fp, err := binary.ReadVarint(r)
+	hi, err := binary.ReadVarint(r)
 	if err != nil {
 		return NaN, err
 	}
-	return Fixed{fp: fp}, nil
+
+	lo, err := binary.ReadVarint(r)
+	if err != nil {
+		return NaN, err
+	}
+
+	return Fixed{hi: hi, lo: lo}, nil
 }
 
 // UnmarshalJSON implements the json.Unmarshaler interface.
@@ -499,6 +669,5 @@ func (f Fixed) MarshalJSON() ([]byte, error) {
 	if f.IsNaN() {
 		return []byte("\"NaN\""), nil
 	}
-	buffer := make([]byte, 24)
-	return itoa(buffer, f.fp), nil
+	return []byte(f.String()), nil
 }

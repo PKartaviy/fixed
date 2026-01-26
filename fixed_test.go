@@ -98,8 +98,8 @@ func TestNewI(t *testing.T) {
 		t.Error("should be equal", f, "123")
 	}
 	f = NewI(123456789012, 9)
-	if f.String() != "123.45678901" {
-		t.Error("should be equal", f, "123.45678901")
+	if f.String() != "123.456789012" {
+		t.Error("should be equal", f, "123.456789012")
 	}
 	f = NewI(123456789012, 9)
 	if f.StringN(7) != "123.4567890" {
@@ -134,16 +134,16 @@ func TestMaxValue(t *testing.T) {
 		t.Error("should be equal", f0, "1234567890")
 	}
 	f0 = NewS("123456789012")
-	if f0.String() != "NaN" {
-		t.Error("should be equal", f0, "NaN")
+	if f0.String() != "123456789012" {
+		t.Error("should be equal", f0, "123456789012")
 	}
 	f0 = NewS("-1234567890")
 	if f0.String() != "-1234567890" {
 		t.Error("should be equal", f0, "-1234567890")
 	}
 	f0 = NewS("-12345678901")
-	if f0.String() != "NaN" {
-		t.Error("should be equal", f0, "NaN")
+	if f0.String() != "-12345678901" {
+		t.Error("should be equal", f0, "-12345678901")
 	}
 	f0 = NewS("9999999999")
 	if f0.String() != "9999999999" {
@@ -158,8 +158,8 @@ func TestMaxValue(t *testing.T) {
 		t.Error("should be equal", f0, "9999999999.99999999")
 	}
 	f0 = NewS("9999999999.12345678901234567890")
-	if f0.String() != "9999999999.12345678" {
-		t.Error("should be equal", f0, "9999999999.12345678")
+	if f0.String() != "9999999999.123456789012345678" {
+		t.Error("should be equal", f0, "9999999999.123456789012345678")
 	}
 
 }
@@ -321,8 +321,8 @@ func TestMulDiv(t *testing.T) {
 	f1 = NewS("3")
 
 	f2 = f0.Div(f1)
-	if f2.String() != "0.66666667" {
-		t.Error("should be equal", f2.String(), "0.66666667")
+	if f2.String() != "0.666666666666666667" {
+		t.Error("should be equal", f2.String(), "0.666666666666666667")
 	}
 
 	f0 = NewS("1000")
@@ -353,16 +353,16 @@ func TestMulDiv(t *testing.T) {
 	f1 = NewS("0.066248")
 
 	f2 = f0.Mul(f1)
-	if f2.String() != "0.00000007" {
-		t.Error("should be equal", f2.String(), "0.00000007")
+	if f2.String() != "0.000000066248" {
+		t.Error("should be equal", f2.String(), "0.000000066248")
 	}
 
 	f0 = NewS("-0.000001")
 	f1 = NewS("0.066248")
 
 	f2 = f0.Mul(f1)
-	if f2.String() != "-0.00000007" {
-		t.Error("should be equal", f2.String(), "-0.00000007")
+	if f2.String() != "-0.000000066248" {
+		t.Error("should be equal", f2.String(), "-0.000000066248")
 	}
 
 }
@@ -397,16 +397,16 @@ func TestOverflow(t *testing.T) {
 		t.Error("should be equal", f0.String(), "1.1234567")
 	}
 	f0 = NewF(1.123456789123)
-	if f0.String() != "1.12345679" {
-		t.Error("should be equal", f0.String(), "1.12345679")
+	if f0.String() != "1.123456789123" {
+		t.Error("should be equal", f0.String(), "1.123456789123")
 	}
 	f0 = NewF(1.0 / 3.0)
-	if f0.String() != "0.33333333" {
-		t.Error("should be equal", f0.String(), "0.33333333")
+	if f0.String() != "0.3333333333333333" {
+		t.Error("should be equal", f0.String(), "0.3333333333333333")
 	}
 	f0 = NewF(2.0 / 3.0)
-	if f0.String() != "0.66666667" {
-		t.Error("should be equal", f0.String(), "0.66666667")
+	if f0.String() != "0.6666666666666666" {
+		t.Error("should be equal", f0.String(), "0.6666666666666666")
 	}
 
 }
