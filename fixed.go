@@ -26,6 +26,7 @@ const nPlaces = 18
 const scale = int64(1000000000000000000) // 10^18
 const zeros = "000000000000000000"
 const MAX = float64(999999999999999999.999999999999999999)
+const maxHi = int64(999999999999999999) // Maximum valid hi value (18 digits)
 
 // NaN representation: both fields set to int64 max
 const nanHi = int64(1<<63 - 1)
@@ -70,15 +71,20 @@ func NewSErr(s string) (Fixed, error) {
 			hi = hi * -1
 		}
 	} else {
-		if len(s[:period]) > 0 {
-			hi, err = strconv.ParseInt(s[:period], 10, 64)
+		intPart := s[:period]
+		if len(intPart) > 0 && intPart != "-" && intPart != "+" {
+			hi, err = strconv.ParseInt(intPart, 10, 64)
 			if err != nil {
 				return NaN, errors.New("cannot parse")
 			}
-			if hi < 0 || s[0] == '-' {
+			if hi < 0 {
 				sign = -1
 				hi = hi * -1
 			}
+		}
+		// Check for sign prefix even if no integer digits
+		if len(intPart) > 0 && intPart[0] == '-' {
+			sign = -1
 		}
 		fs := s[period+1:]
 		fs = fs + zeros[:max(0, nPlaces-len(fs))]
@@ -87,7 +93,8 @@ func NewSErr(s string) (Fixed, error) {
 			return NaN, errors.New("cannot parse")
 		}
 	}
-	if float64(hi) > MAX {
+	// Check for overflow - hi must fit within 18 digits
+	if hi > maxHi {
 		return NaN, errTooLarge
 	}
 	return Fixed{hi: sign * hi, lo: sign * lo}, nil
@@ -182,6 +189,11 @@ func NewI(i int64, n uint) Fixed {
 	// Scale decimal portion to 18 digits
 	lo := remainder * int64(math.Pow10(int(nPlaces-n)))
 
+	// Check for overflow
+	if hi > maxHi || hi < -maxHi {
+		return NaN
+	}
+
 	return Fixed{hi: hi, lo: lo}
 }
 
@@ -227,6 +239,12 @@ func (f Fixed) Add(f0 Fixed) Fixed {
 	hi := f.hi + f0.hi
 	lo := f.lo + f0.lo
 	hi, lo = normalize(hi, lo)
+
+	// Check for overflow
+	if hi > maxHi || hi < -maxHi {
+		return NaN
+	}
+
 	return Fixed{hi: hi, lo: lo}
 }
 
@@ -238,6 +256,12 @@ func (f Fixed) Sub(f0 Fixed) Fixed {
 	hi := f.hi - f0.hi
 	lo := f.lo - f0.lo
 	hi, lo = normalize(hi, lo)
+
+	// Check for overflow
+	if hi > maxHi || hi < -maxHi {
+		return NaN
+	}
+
 	return Fixed{hi: hi, lo: lo}
 }
 
@@ -294,6 +318,12 @@ func (f Fixed) Mul(f0 Fixed) Fixed {
 
 	// Normalize to ensure sign consistency
 	resHi, resLo := normalize(hi.Int64(), lo.Int64())
+
+	// Check if result exceeds valid range
+	if resHi > maxHi || resHi < -maxHi {
+		return NaN
+	}
+
 	return Fixed{hi: resHi, lo: resLo}
 }
 
@@ -317,16 +347,18 @@ func (f Fixed) Div(f0 Fixed) Fixed {
 	// Scale dividend by 10^18 for proper decimal places
 	dividend.Mul(dividend, big.NewInt(scale))
 
-	// Perform division with rounding
+	// Perform division with rounding toward nearest
+	// Use QuoRem for truncated division (toward zero) instead of DivMod (Euclidean)
+	result := new(big.Int)
 	remainder := new(big.Int)
-	result, remainder := new(big.Int).DivMod(dividend, divisor, remainder)
+	result.QuoRem(dividend, divisor, remainder)
 
-	// Round result: if abs(remainder) >= abs(divisor)/2, round away from zero
-	halfDivisor := new(big.Int).Abs(divisor)
-	halfDivisor.Div(halfDivisor, big.NewInt(2))
+	// Round to nearest: if abs(2*remainder) >= abs(divisor), round away from zero
 	absRemainder := new(big.Int).Abs(remainder)
+	absRemainder.Mul(absRemainder, big.NewInt(2))
+	absDivisor := new(big.Int).Abs(divisor)
 
-	if absRemainder.Cmp(halfDivisor) >= 0 {
+	if absRemainder.Cmp(absDivisor) >= 0 {
 		if result.Sign() >= 0 {
 			result.Add(result, big.NewInt(1))
 		} else {
@@ -334,10 +366,14 @@ func (f Fixed) Div(f0 Fixed) Fixed {
 		}
 	}
 
-	// Split result back into hi and lo
+	// Split result back into hi and lo using truncated division
+	// to avoid Euclidean division sign issues
 	bigScale := big.NewInt(scale)
 	hi := new(big.Int).Div(result, bigScale)
-	lo := new(big.Int).Mod(result, bigScale)
+
+	// Calculate lo as: lo = result - hi*scale (preserves sign correctly)
+	lo := new(big.Int).Mul(hi, bigScale)
+	lo.Sub(result, lo)
 
 	if !hi.IsInt64() || !lo.IsInt64() {
 		return NaN
