@@ -825,3 +825,45 @@ func TestMulVsMulSlow(t *testing.T) {
 		compare("large", i, a, b)
 	}
 }
+
+func TestNewFVsNewFSlow(t *testing.T) {
+	specific := []float64{
+		0, -0.0, 1, -1, 0.5, -0.5,
+		123.456, -123.456,
+		0.0001, -0.0001,
+		1.0 / 3.0, 2.0 / 3.0,
+		math.Pi, math.E,
+		1e15, -1e15,
+		999999999999999999.0,
+		-999999999999999999.0,
+		0.000000000000000001,
+		42.0,
+		0.1, 0.2, 0.3,
+		1234567890.123456789,
+	}
+
+	match := func(label string, v float64) {
+		fast := NewF(v)
+		slow := NewFSlow(v)
+		// NaN.Equal(NaN) is false, so compare IsNaN separately
+		if fast.IsNaN() && slow.IsNaN() {
+			return
+		}
+		if !fast.Equal(slow) {
+			t.Errorf("%s: NewF(%v) = %s, NewFSlow(%v) = %s", label, v, fast.String(), v, slow.String())
+		}
+	}
+
+	for _, v := range specific {
+		match("specific", v)
+	}
+
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 10000; i++ {
+		f := (rng.Float64()*2 - 1) * 1e18
+		if f >= MAX || f <= -MAX {
+			continue
+		}
+		match("random", f)
+	}
+}

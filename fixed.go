@@ -145,9 +145,69 @@ func normalize(hi, lo int64) (int64, int64) {
 	return hi, lo
 }
 
-// NewF creates a Fixed from an float64
-// float64 has ~15-16 digits of precision; we round to avoid showing artifacts
+// NewF creates a Fixed from a float64, zero-allocation.
 func NewF(f float64) Fixed {
+	if math.IsNaN(f) {
+		return NaN
+	}
+	if f >= MAX || f <= -MAX {
+		return NaN
+	}
+	if f == 0 {
+		return ZERO
+	}
+
+	// Format into stack buffer (no heap allocation)
+	var buf [64]byte
+	b := strconv.AppendFloat(buf[:0], f, 'f', -1, 64)
+
+	// Parse bytes directly
+	i := 0
+	neg := false
+	if b[0] == '-' {
+		neg = true
+		i++
+	}
+
+	// Scan integer digits
+	var hi int64
+	for i < len(b) && b[i] != '.' {
+		hi = hi*10 + int64(b[i]-'0')
+		i++
+	}
+
+	// Scan fractional digits
+	var lo int64
+	var nFrac int
+	if i < len(b) && b[i] == '.' {
+		i++ // skip '.'
+		for i < len(b) && nFrac < nPlaces {
+			lo = lo*10 + int64(b[i]-'0')
+			nFrac++
+			i++
+		}
+	}
+
+	// Pad lo to nPlaces digits
+	for nFrac < nPlaces {
+		lo *= 10
+		nFrac++
+	}
+
+	if hi > maxHi {
+		return NaN
+	}
+
+	if neg {
+		hi = -hi
+		lo = -lo
+	}
+
+	return Fixed{hi: hi, lo: lo}
+}
+
+// NewFSlow creates a Fixed from a float64 via string conversion (allocates).
+func NewFSlow(f float64) Fixed {
 	if math.IsNaN(f) {
 		return NaN
 	}

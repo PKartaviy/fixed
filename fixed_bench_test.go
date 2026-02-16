@@ -191,6 +191,17 @@ func BenchmarkStringBigFloat(b *testing.B) {
 	}
 }
 
+func BenchmarkNewFFixed(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		NewF(123456789.12345)
+	}
+}
+func BenchmarkNewFSlowFixed(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		NewFSlow(123456789.12345)
+	}
+}
+
 func BenchmarkWriteTo(b *testing.B) {
 	f0 := NewF(123456789.0)
 
