@@ -295,7 +295,12 @@ func (f Fixed) Mul(f0 Fixed) Fixed {
 	}
 
 	// Determine result sign, then work with absolute values
-	negative := (f.Sign() < 0) != (f0.Sign() < 0)
+	signA := f.Sign()
+	signB := f0.Sign()
+	if signA == 0 || signB == 0 {
+		return ZERO
+	}
+	negative := signA != signB
 
 	aHi := f.hi
 	aLo := f.lo
@@ -331,9 +336,9 @@ func (f Fixed) Mul(f0 Fixed) Fixed {
 	b[3] = bLo % half
 
 	// Convolution: p[k] = sum of a[i]*b[j] where i+j=k
-	// The full product has digits p[0]..p[7], but we divide by scale (= half^2),
-	// which shifts by 2 digit positions. So the result digits are p[2]..p[5].
-	// p[0],p[1] must be zero (else overflow). p[6],p[7] are truncated.
+	// The full product has digits p[0]..p[6]. Dividing by scale (= half^2)
+	// shifts by 2 digit positions, so the result digits are p[1]..p[4].
+	// p[0] must be zero (else overflow). p[5],p[6] are truncated.
 	// Each product a[i]*b[j] < (10^9)^2 = 10^18, at most 4 terms per p[k],
 	// so p[k] < 4*10^18 < math.MaxInt64. No overflow in int64.
 	var p [7]int64

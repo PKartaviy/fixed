@@ -737,6 +737,9 @@ func TestMulVsMulSlow(t *testing.T) {
 		{"neg*neg", NewS("-123.456"), NewS("-789.012")},
 		{"zero*pos", zero, NewS("123.456")},
 		{"pos*zero", NewS("123.456"), zero},
+		{"zero*neg", zero, NewS("-123.456")},
+		{"neg*zero", NewS("-123.456"), zero},
+		{"zero*zero", zero, zero},
 		{"one*val", one, NewS("999.999")},
 		{"negone*val", negOne, NewS("999.999")},
 		{"frac*frac", NewS("0.000001"), NewS("0.066248")},
@@ -746,6 +749,16 @@ func TestMulVsMulSlow(t *testing.T) {
 		{"small_fracs", NewS("0.000000000000000001"), NewS("1")},
 		{"mixed1", NewS("123456789.123456789"), NewS("0.000000001")},
 		{"mixed2", NewS("1.999999999999999999"), NewS("1.999999999999999999")},
+		// Large hi values (a[0] > 0 in base-10^9 decomposition)
+		{"large_hi*frac", NewS("1000000001.5"), NewS("0.5")},
+		{"large_hi*one", NewS("999999999999999999"), NewS("1")},
+		{"large_hi*small", NewS("999999999999999999"), NewS("0.000000000000000001")},
+		{"large_hi*neg_frac", NewS("999999999999999999"), NewS("-0.000000000000000001")},
+		{"large_hi*large_frac", NewS("123456789012345678"), NewS("0.000000001")},
+		{"neg_large*frac", NewS("-123456789012345678"), NewS("0.5")},
+		// Overflow cases
+		{"overflow", NewS("999999999999999999"), NewS("999999999999999999")},
+		{"near_overflow", NewS("999999999999999999.999999999999999999"), NewS("1.000000000000000001")},
 		{"both_nan", NaN, NaN},
 		{"nan_left", NaN, one},
 		{"nan_right", one, NaN},
@@ -763,37 +776,52 @@ func TestMulVsMulSlow(t *testing.T) {
 		}
 	}
 
-	// Random/fuzz loop
+	// Random/fuzz loop with two ranges:
+	// 1) Small hi (products usually in range) — tests normal paths
+	// 2) Large hi with small multiplier — tests a[0]>0 digit decomposition
 	rng := rand.New(rand.NewSource(42))
-	const iterations = 10000
-	for i := 0; i < iterations; i++ {
-		// Generate random hi in [-999999999, 999999999] and lo in [0, scale-1]
-		// to keep products within range
+
+	compare := func(tag string, i int, a, b Fixed) {
+		fast := a.Mul(b)
+		slow := a.MulSlow(b)
+		if fast.IsNaN() && slow.IsNaN() {
+			return
+		}
+		if !fast.Equal(slow) {
+			t.Errorf("%s iter %d: Mul(%s, %s) = %s, MulSlow = %s",
+				tag, i, a, b, fast, slow)
+		}
+	}
+
+	for i := 0; i < 10000; i++ {
+		// Small hi: [-10^9, 10^9]
 		aHi := rng.Int63n(2000000000) - 1000000000
 		aLo := rng.Int63n(1000000000000000000)
 		bHi := rng.Int63n(2000000000) - 1000000000
 		bLo := rng.Int63n(1000000000000000000)
-
-		// Ensure sign consistency
 		if aHi < 0 {
 			aLo = -aLo
 		}
 		if bHi < 0 {
 			bLo = -bLo
 		}
-
 		a := NewI(aHi, 0).Add(NewI(aLo, 18))
 		b := NewI(bHi, 0).Add(NewI(bLo, 18))
+		compare("small", i, a, b)
+	}
 
-		fast := a.Mul(b)
-		slow := a.MulSlow(b)
-
-		if fast.IsNaN() && slow.IsNaN() {
-			continue
+	for i := 0; i < 10000; i++ {
+		// Large hi * small value — exercises a[0] > 0 without always overflowing
+		aHi := rng.Int63n(999999999999999999) + 1 // [1, maxHi]
+		aLo := rng.Int63n(1000000000000000000)
+		// Small multiplier: pure fraction in [0, 1)
+		bLo := rng.Int63n(1000000000000000000)
+		sign := int64(1)
+		if rng.Intn(2) == 0 {
+			sign = -1
 		}
-		if !fast.Equal(slow) {
-			t.Errorf("random iter %d: Mul(%s, %s) = %s, MulSlow = %s",
-				i, a, b, fast, slow)
-		}
+		a := NewI(sign*aHi, 0).Add(NewI(sign*aLo, 18))
+		b := NewI(bLo, 18)
+		compare("large", i, a, b)
 	}
 }
