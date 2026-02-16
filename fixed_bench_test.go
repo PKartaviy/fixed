@@ -52,6 +52,14 @@ func BenchmarkMulFixed(b *testing.B) {
 		f0.Mul(f1)
 	}
 }
+func BenchmarkMulSlowFixed(b *testing.B) {
+	f0 := NewF(123456789.0)
+	f1 := NewF(1234.0)
+
+	for i := 0; i < b.N; i++ {
+		f0.MulSlow(f1)
+	}
+}
 func BenchmarkMulDecimal(b *testing.B) {
 	f0 := decimal.NewFromFloat(123456789.0)
 	f1 := decimal.NewFromFloat(1234.0)

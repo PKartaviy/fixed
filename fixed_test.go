@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"math/rand"
 	"testing"
 
 	. "github.com/PKartaviy/fixed"
@@ -717,5 +718,82 @@ func TestJSON_NaN(t *testing.T) {
 
 	if !j.F.IsNaN() {
 		t.Error("did not decode NaN", j.F, f)
+	}
+}
+
+func TestMulVsMulSlow(t *testing.T) {
+	type pair struct {
+		name string
+		a, b Fixed
+	}
+
+	one := NewS("1")
+	negOne := NewS("-1")
+	zero := NewS("0")
+
+	cases := []pair{
+		{"pos*pos", NewS("123.456"), NewS("789.012")},
+		{"pos*neg", NewS("123.456"), NewS("-789.012")},
+		{"neg*neg", NewS("-123.456"), NewS("-789.012")},
+		{"zero*pos", zero, NewS("123.456")},
+		{"pos*zero", NewS("123.456"), zero},
+		{"one*val", one, NewS("999.999")},
+		{"negone*val", negOne, NewS("999.999")},
+		{"frac*frac", NewS("0.000001"), NewS("0.066248")},
+		{"neg_frac*frac", NewS("-0.000001"), NewS("0.066248")},
+		{"large_int", NewS("10000.1"), NewS("10000")},
+		{"near_max", NewS("999999999"), NewS("999999999")},
+		{"small_fracs", NewS("0.000000000000000001"), NewS("1")},
+		{"mixed1", NewS("123456789.123456789"), NewS("0.000000001")},
+		{"mixed2", NewS("1.999999999999999999"), NewS("1.999999999999999999")},
+		{"both_nan", NaN, NaN},
+		{"nan_left", NaN, one},
+		{"nan_right", one, NaN},
+	}
+
+	for _, tc := range cases {
+		fast := tc.a.Mul(tc.b)
+		slow := tc.a.MulSlow(tc.b)
+		if fast.IsNaN() && slow.IsNaN() {
+			continue
+		}
+		if !fast.Equal(slow) {
+			t.Errorf("%s: Mul(%s, %s) = %s, MulSlow = %s",
+				tc.name, tc.a, tc.b, fast, slow)
+		}
+	}
+
+	// Random/fuzz loop
+	rng := rand.New(rand.NewSource(42))
+	const iterations = 10000
+	for i := 0; i < iterations; i++ {
+		// Generate random hi in [-999999999, 999999999] and lo in [0, scale-1]
+		// to keep products within range
+		aHi := rng.Int63n(2000000000) - 1000000000
+		aLo := rng.Int63n(1000000000000000000)
+		bHi := rng.Int63n(2000000000) - 1000000000
+		bLo := rng.Int63n(1000000000000000000)
+
+		// Ensure sign consistency
+		if aHi < 0 {
+			aLo = -aLo
+		}
+		if bHi < 0 {
+			bLo = -bLo
+		}
+
+		a := NewI(aHi, 0).Add(NewI(aLo, 18))
+		b := NewI(bHi, 0).Add(NewI(bLo, 18))
+
+		fast := a.Mul(b)
+		slow := a.MulSlow(b)
+
+		if fast.IsNaN() && slow.IsNaN() {
+			continue
+		}
+		if !fast.Equal(slow) {
+			t.Errorf("random iter %d: Mul(%s, %s) = %s, MulSlow = %s",
+				i, a, b, fast, slow)
+		}
 	}
 }

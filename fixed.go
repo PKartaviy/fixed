@@ -284,9 +284,122 @@ func abs(i int64) int64 {
 	return i * -1
 }
 
-// Mul multiplies f by f0 returning a Fixed. If either operand is NaN, NaN is returned
-// Uses optimized int64 arithmetic for small values, falls back to math/big for large values
+// half is 10^9, used as the base for schoolbook multiplication in Mul.
+const half = int64(1000000000)
+
+// Mul multiplies f by f0 returning a Fixed. If either operand is NaN, NaN is returned.
+// Zero-allocation implementation using base-10^9 schoolbook multiplication.
 func (f Fixed) Mul(f0 Fixed) Fixed {
+	if f.IsNaN() || f0.IsNaN() {
+		return NaN
+	}
+
+	// Determine result sign, then work with absolute values
+	negative := (f.Sign() < 0) != (f0.Sign() < 0)
+
+	aHi := f.hi
+	aLo := f.lo
+	if aHi < 0 {
+		aHi = -aHi
+	}
+	if aLo < 0 {
+		aLo = -aLo
+	}
+
+	bHi := f0.hi
+	bLo := f0.lo
+	if bHi < 0 {
+		bHi = -bHi
+	}
+	if bLo < 0 {
+		bLo = -bLo
+	}
+
+	// Decompose each operand into 4 digits in base half (10^9):
+	//   value = (d[0]*half + d[1]) * scale + (d[2]*half + d[3])
+	// where scale = half * half = 10^18
+	var a [4]int64
+	a[0] = aHi / half
+	a[1] = aHi % half
+	a[2] = aLo / half
+	a[3] = aLo % half
+
+	var b [4]int64
+	b[0] = bHi / half
+	b[1] = bHi % half
+	b[2] = bLo / half
+	b[3] = bLo % half
+
+	// Convolution: p[k] = sum of a[i]*b[j] where i+j=k
+	// The full product has digits p[0]..p[7], but we divide by scale (= half^2),
+	// which shifts by 2 digit positions. So the result digits are p[2]..p[5].
+	// p[0],p[1] must be zero (else overflow). p[6],p[7] are truncated.
+	// Each product a[i]*b[j] < (10^9)^2 = 10^18, at most 4 terms per p[k],
+	// so p[k] < 4*10^18 < math.MaxInt64. No overflow in int64.
+	var p [7]int64
+	p[0] = a[0] * b[0]
+	p[1] = a[0]*b[1] + a[1]*b[0]
+	p[2] = a[0]*b[2] + a[1]*b[1] + a[2]*b[0]
+	p[3] = a[0]*b[3] + a[1]*b[2] + a[2]*b[1] + a[3]*b[0]
+	p[4] = a[1]*b[3] + a[2]*b[2] + a[3]*b[1]
+	p[5] = a[2]*b[3] + a[3]*b[2]
+	p[6] = a[3] * b[3]
+
+	// Carry-propagate from p[6] up to p[0]
+	p[5] += p[6] / half
+	p[6] = p[6] % half
+	p[4] += p[5] / half
+	p[5] = p[5] % half
+	p[3] += p[4] / half
+	p[4] = p[4] % half
+	p[2] += p[3] / half
+	p[3] = p[3] % half
+	p[1] += p[2] / half
+	p[2] = p[2] % half
+	p[0] += p[1] / half
+	p[1] = p[1] % half
+
+	// Overflow check: the top digit must be zero after carry
+	if p[0] != 0 {
+		return NaN
+	}
+
+	// Reconstruct hi and lo from result digits [1..4]
+	// The product has 7 digits (p[0]..p[6]). Dividing by scale=half^2 shifts
+	// by 2 digit positions, so integer part = p[0]*B^4 + p[1]*B^3 + p[2]*B^2 + p[3]*B + p[4].
+	// With p[0]=0: hi = p[1]*half + p[2], lo = p[3]*half + p[4].
+	// Digits p[5], p[6] are truncated (division toward zero).
+	resHi := p[1]*half + p[2]
+	resLo := p[3]*half + p[4]
+
+	// For negative results with a non-zero truncated remainder, adjust to match
+	// floor division (round toward -infinity) semantics used by MulSlow's big.Int.Div.
+	// Truncation gives |result|, floor division gives |result|+1 when remainder > 0.
+	if negative && (p[5] != 0 || p[6] != 0) {
+		resLo++
+		if resLo >= scale {
+			resLo -= scale
+			resHi++
+		}
+	}
+
+	// Check if result exceeds valid range
+	if resHi > maxHi {
+		return NaN
+	}
+
+	// Apply sign
+	if negative && (resHi != 0 || resLo != 0) {
+		resHi = -resHi
+		resLo = -resLo
+	}
+
+	return Fixed{hi: resHi, lo: resLo}
+}
+
+// MulSlow multiplies f by f0 returning a Fixed. If either operand is NaN, NaN is returned
+// Uses math/big for all multiplications — correct but allocates.
+func (f Fixed) MulSlow(f0 Fixed) Fixed {
 	if f.IsNaN() || f0.IsNaN() {
 		return NaN
 	}
