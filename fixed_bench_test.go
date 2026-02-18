@@ -95,6 +95,14 @@ func BenchmarkDivFixed(b *testing.B) {
 		f0.Div(f1)
 	}
 }
+func BenchmarkDivSlowFixed(b *testing.B) {
+	f0 := NewF(123456789.0)
+	f1 := NewF(1234.0)
+
+	for i := 0; i < b.N; i++ {
+		f0.DivSlow(f1)
+	}
+}
 func BenchmarkDivDecimal(b *testing.B) {
 	f0 := decimal.NewFromFloat(123456789.0)
 	f1 := decimal.NewFromFloat(1234.0)

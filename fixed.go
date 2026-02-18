@@ -505,9 +505,254 @@ func (f Fixed) MulSlow(f0 Fixed) Fixed {
 	return Fixed{hi: resHi, lo: resLo}
 }
 
-// Div divides f by f0 returning a Fixed. If either operand is NaN, NaN is returned
-// Uses arbitrary precision math/big for accurate division
+// Div divides f by f0 returning a Fixed. If either operand is NaN, NaN is returned.
+// Zero-allocation implementation using base-10^9 long division (Knuth's Algorithm D).
 func (f Fixed) Div(f0 Fixed) Fixed {
+	if f.IsNaN() || f0.IsNaN() {
+		return NaN
+	}
+	if f0.hi == 0 && f0.lo == 0 {
+		return NaN // division by zero
+	}
+
+	// Determine result sign, then work with absolute values
+	signA := f.Sign()
+	signB := f0.Sign()
+	if signA == 0 {
+		return ZERO
+	}
+	negative := signA != signB
+
+	aHi := f.hi
+	aLo := f.lo
+	if aHi < 0 {
+		aHi = -aHi
+	}
+	if aLo < 0 {
+		aLo = -aLo
+	}
+
+	bHi := f0.hi
+	bLo := f0.lo
+	if bHi < 0 {
+		bHi = -bHi
+	}
+	if bLo < 0 {
+		bLo = -bLo
+	}
+
+	// Decompose dividend into base-B (B=half=10^9) digits.
+	// Dividend = (aHi*scale + aLo) * scale = aHi*B^4 + aLo*B^2
+	// 7 digits: u[0]=0 (leading zero for Algorithm D), u[1..4] from value, u[5..6]=0 from ×scale
+	var u [7]int64
+	u[1] = aHi / half
+	u[2] = aHi % half
+	u[3] = aLo / half
+	u[4] = aLo % half
+
+	// Decompose divisor: bHi*scale + bLo = bHi*B^2 + bLo
+	// Up to 4 digits, strip leading zeros to get n digits
+	var vBuf [4]int64
+	vBuf[0] = bHi / half
+	vBuf[1] = bHi % half
+	vBuf[2] = bLo / half
+	vBuf[3] = bLo % half
+
+	vStart := 0
+	for vStart < 3 && vBuf[vStart] == 0 {
+		vStart++
+	}
+	n := 4 - vStart
+
+	var v [4]int64
+	for i := 0; i < n; i++ {
+		v[i] = vBuf[vStart+i]
+	}
+
+	const m = 6 // dividend has m+1 = 7 digits (u[0]..u[6])
+
+	var q [7]int64 // quotient digits
+
+	if n == 1 {
+		// Simple single-digit long division
+		rem := int64(0)
+		for i := 0; i <= m; i++ {
+			cur := rem*half + u[i]
+			q[i] = cur / v[0]
+			rem = cur % v[0]
+		}
+
+		// Overflow check: first 3 quotient digits must be zero
+		if q[0] != 0 || q[1] != 0 || q[2] != 0 {
+			return NaN
+		}
+
+		resHi := q[3]*half + q[4]
+		resLo := q[5]*half + q[6]
+
+		// Round to nearest: if 2*rem >= divisor, round up (away from zero)
+		if 2*rem >= v[0] {
+			resLo++
+			if resLo >= scale {
+				resLo -= scale
+				resHi++
+			}
+		}
+
+		if resHi > maxHi {
+			return NaN
+		}
+
+		if negative && (resHi != 0 || resLo != 0) {
+			resHi = -resHi
+			resLo = -resLo
+		}
+
+		return Fixed{hi: resHi, lo: resLo}
+	}
+
+	// n >= 2: Knuth's Algorithm D
+
+	// D1. Normalize: multiply u and v by d = B/(v[0]+1) so that v[0] >= B/2.
+	// All intermediate products fit in int64: digit*d < B*B = 10^18 < maxInt64.
+	d := half / (v[0] + 1)
+
+	// Multiply u[0..m] by d (right to left, propagating carry)
+	carry := int64(0)
+	for i := m; i >= 0; i-- {
+		tmp := u[i]*d + carry
+		u[i] = tmp % half
+		carry = tmp / half
+	}
+	// carry == 0: u[0] was 0 and absorbs any carry from u[1..6]
+
+	// Multiply v[0..n-1] by d
+	carry = 0
+	for i := n - 1; i >= 0; i-- {
+		tmp := v[i]*d + carry
+		v[i] = tmp % half
+		carry = tmp / half
+	}
+	// After normalization: v[0] >= floor(B/2)
+
+	// D2-D7. Main loop: compute quotient digits q[0..m-n]
+	for j := 0; j <= m-n; j++ {
+		// D3. Calculate trial quotient q̂
+		qhat := (u[j]*half + u[j+1]) / v[0]
+		rhat := (u[j]*half + u[j+1]) % v[0]
+
+		// Refine q̂ using second divisor digit
+		for qhat >= half || qhat*v[1] > rhat*half+u[j+2] {
+			qhat--
+			rhat += v[0]
+			if rhat >= half {
+				break
+			}
+		}
+
+		// D4. Multiply and subtract: u[j..j+n] -= qhat * v[0..n-1]
+		carry = 0
+		borrow := int64(0)
+		for k := n - 1; k >= 0; k-- {
+			p := qhat*v[k] + carry
+			carry = p / half
+			pLo := p % half
+
+			diff := u[j+1+k] - pLo - borrow
+			if diff < 0 {
+				diff += half
+				borrow = 1
+			} else {
+				borrow = 0
+			}
+			u[j+1+k] = diff
+		}
+		u[j] -= carry + borrow
+
+		// D5. Set quotient digit
+		q[j] = qhat
+
+		if u[j] < 0 {
+			// D6. Add back (rare: qhat was one too large)
+			q[j]--
+			carry = 0
+			for k := n - 1; k >= 0; k-- {
+				sum := u[j+1+k] + v[k] + carry
+				u[j+1+k] = sum % half
+				carry = sum / half
+			}
+			u[j] += carry
+		}
+	}
+
+	// Quotient is in q[0..m-n], total qLen = m-n+1 = 7-n digits.
+	// For the result to fit in 4 base-B digits, leading digits must be zero.
+	qLen := m - n + 1
+	for i := 0; i < qLen-4; i++ {
+		if q[i] != 0 {
+			return NaN
+		}
+	}
+
+	// Extract 4-digit quotient (pad with leading zeros if qLen < 4)
+	var qd [4]int64
+	for i := 0; i < 4; i++ {
+		idx := qLen - 4 + i
+		if idx >= 0 {
+			qd[i] = q[idx]
+		}
+	}
+
+	resHi := qd[0]*half + qd[1]
+	resLo := qd[2]*half + qd[3]
+
+	// Round to nearest: compare 2×remainder with divisor.
+	// Both are still multiplied by normalization factor d, so comparison is valid.
+	// Remainder is in u[m-n+1..m] (n digits), divisor is v[0..n-1] (n digits).
+	roundUp := false
+	carry2 := int64(0)
+	var rem2 [4]int64
+	for i := n - 1; i >= 0; i-- {
+		tmp := u[m-n+1+i]*2 + carry2
+		rem2[i] = tmp % half
+		carry2 = tmp / half
+	}
+	if carry2 > 0 {
+		roundUp = true
+	} else {
+		for i := 0; i < n; i++ {
+			if rem2[i] > v[i] {
+				roundUp = true
+				break
+			} else if rem2[i] < v[i] {
+				break
+			}
+		}
+	}
+
+	if roundUp {
+		resLo++
+		if resLo >= scale {
+			resLo -= scale
+			resHi++
+		}
+	}
+
+	if resHi > maxHi {
+		return NaN
+	}
+
+	if negative && (resHi != 0 || resLo != 0) {
+		resHi = -resHi
+		resLo = -resLo
+	}
+
+	return Fixed{hi: resHi, lo: resLo}
+}
+
+// DivSlow divides f by f0 returning a Fixed. If either operand is NaN, NaN is returned
+// Uses arbitrary precision math/big for accurate division
+func (f Fixed) DivSlow(f0 Fixed) Fixed {
 	if f.IsNaN() || f0.IsNaN() {
 		return NaN
 	}

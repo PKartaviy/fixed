@@ -826,6 +826,109 @@ func TestMulVsMulSlow(t *testing.T) {
 	}
 }
 
+func TestDivVsDivSlow(t *testing.T) {
+	type pair struct {
+		name string
+		a, b Fixed
+	}
+
+	one := NewS("1")
+	negOne := NewS("-1")
+	zero := NewS("0")
+
+	cases := []pair{
+		{"1/3", one, NewS("3")},
+		{"2/3", NewS("2"), NewS("3")},
+		{"1/7", one, NewS("7")},
+		{"1/9", one, NewS("9")},
+		{"10/3", NewS("10"), NewS("3")},
+		{"-1/3", negOne, NewS("3")},
+		{"1/-3", one, NewS("-3")},
+		{"-1/-3", negOne, NewS("-3")},
+		{"5/5", NewS("5"), NewS("5")},
+		{"large/small", NewS("999999999999999999"), NewS("0.000000000000000001")},
+		{"small/large", NewS("0.000000000000000001"), NewS("999999999999999999")},
+		{"max/1", NewS("999999999999999999.999999999999999999"), one},
+		{"max/-1", NewS("999999999999999999.999999999999999999"), negOne},
+		{"frac/frac", NewS("0.123456789"), NewS("0.987654321")},
+		{"-frac/frac", NewS("-0.123456789"), NewS("0.987654321")},
+		{"large_int/large_int", NewS("123456789012345678"), NewS("987654321")},
+		{"1/1", one, one},
+		{"0/1", zero, one},
+		{"0/-1", zero, negOne},
+		{"div_by_zero", one, zero},
+		{"mixed", NewS("123456789.123456789"), NewS("0.000000001")},
+		{"near_max_result", NewS("999999999999999999"), NewS("1.000000000000000001")},
+		{"both_nan", NaN, NaN},
+		{"nan_left", NaN, one},
+		{"nan_right", one, NaN},
+	}
+
+	for _, tc := range cases {
+		fast := tc.a.Div(tc.b)
+		slow := tc.a.DivSlow(tc.b)
+		if fast.IsNaN() && slow.IsNaN() {
+			continue
+		}
+		if !fast.Equal(slow) {
+			t.Errorf("%s: Div(%s, %s) = %s, DivSlow = %s",
+				tc.name, tc.a, tc.b, fast, slow)
+		}
+	}
+
+	// Random/fuzz loop
+	rng := rand.New(rand.NewSource(42))
+
+	compare := func(tag string, i int, a, b Fixed) {
+		fast := a.Div(b)
+		slow := a.DivSlow(b)
+		if fast.IsNaN() && slow.IsNaN() {
+			return
+		}
+		if !fast.Equal(slow) {
+			t.Errorf("%s iter %d: Div(%s, %s) = %s, DivSlow = %s",
+				tag, i, a, b, fast, slow)
+		}
+	}
+
+	for i := 0; i < 10000; i++ {
+		// Random values with moderate hi
+		aHi := rng.Int63n(2000000000) - 1000000000
+		aLo := rng.Int63n(1000000000000000000)
+		bHi := rng.Int63n(2000000000) - 1000000000
+		bLo := rng.Int63n(1000000000000000000)
+		if aHi < 0 {
+			aLo = -aLo
+		}
+		if bHi < 0 {
+			bLo = -bLo
+		}
+		a := NewI(aHi, 0).Add(NewI(aLo, 18))
+		b := NewI(bHi, 0).Add(NewI(bLo, 18))
+		// Skip division by zero
+		if b.Sign() == 0 {
+			continue
+		}
+		compare("small", i, a, b)
+	}
+
+	for i := 0; i < 10000; i++ {
+		// Large dividend / small divisor — exercises quotient overflow paths
+		aHi := rng.Int63n(999999999999999999) + 1
+		aLo := rng.Int63n(1000000000000000000)
+		// Divisor: small positive value to avoid trivial overflow
+		bHi := rng.Int63n(1000) + 1
+		bLo := rng.Int63n(1000000000000000000)
+		sign := int64(1)
+		if rng.Intn(2) == 0 {
+			sign = -1
+		}
+		a := NewI(sign*aHi, 0).Add(NewI(sign*aLo, 18))
+		b := NewI(bHi, 0).Add(NewI(bLo, 18))
+		compare("large", i, a, b)
+	}
+}
+
 func TestNewFVsNewFSlow(t *testing.T) {
 	specific := []float64{
 		0, -0.0, 1, -1, 0.5, -0.5,
