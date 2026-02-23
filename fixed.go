@@ -38,6 +38,40 @@ var ZERO = Fixed{hi: 0, lo: 0}
 var errTooLarge = errors.New("significand too large")
 var errFormat = errors.New("invalid encoding")
 
+var pow10table = [19]int64{
+	1,
+	10,
+	100,
+	1000,
+	10000,
+	100000,
+	1000000,
+	10000000,
+	100000000,
+	1000000000,
+	10000000000,
+	100000000000,
+	1000000000000,
+	10000000000000,
+	100000000000000,
+	1000000000000000,
+	10000000000000000,
+	100000000000000000,
+	1000000000000000000,
+}
+
+var errPow10Overflow = errors.New("pow10: exponent out of int64 range")
+
+func ipow10(n int) (int64, error) {
+	if n < 0 {
+		return 0, errPow10Overflow
+	}
+	if n > 18 {
+		return pow10table[18], errPow10Overflow
+	}
+	return pow10table[n], nil
+}
+
 // NewS creates a new Fixed from a string, returning NaN if the string could not be parsed
 func NewS(s string) Fixed {
 	f, _ := NewSErr(s)
@@ -237,17 +271,22 @@ func NewFSlow(f float64) Fixed {
 // For example, NewI(123,1) becomes 12.3. If n > 18, the value is truncated
 func NewI(i int64, n uint) Fixed {
 	if n > nPlaces {
-		i = i / int64(math.Pow10(int(n-nPlaces)))
+		p, err := ipow10(int(n - nPlaces))
+		if err != nil {
+			panic(err)
+		}
+		i = i / p
 		n = nPlaces
 	}
 
 	// Split i into integer and decimal portions based on n
-	divisor := int64(math.Pow10(int(n)))
+	divisor, _ := ipow10(int(n))
 	hi := i / divisor
 	remainder := i % divisor
 
 	// Scale decimal portion to 18 digits
-	lo := remainder * int64(math.Pow10(int(nPlaces-n)))
+	p, _ := ipow10(int(nPlaces - n))
+	lo := remainder * p
 
 	// Check for overflow
 	if hi > maxHi || hi < -maxHi {
@@ -825,7 +864,7 @@ func (f Fixed) Round(n int) Fixed {
 
 	if n >= 0 {
 		// Rounding decimal part (lo)
-		divisor := int64(math.Pow10(18 - n))
+		divisor, _ := ipow10(18 - n)
 		remainder := f.lo % divisor
 		absRemainder := remainder
 		if absRemainder < 0 {
@@ -848,7 +887,10 @@ func (f Fixed) Round(n int) Fixed {
 		return Fixed{hi: hi, lo: lo}
 	} else {
 		// Rounding integer part (hi), zero out lo
-		divisor := int64(math.Pow10(-n))
+		divisor, err := ipow10(-n)
+		if err != nil {
+			panic(err)
+		}
 		remainder := f.hi % divisor
 		absRemainder := remainder
 		if absRemainder < 0 {
@@ -880,7 +922,11 @@ func (f Fixed) Ceil(n int) Fixed {
 	}
 	adj := int64(1)
 	if n < 0 {
-		adj = adj * int64(math.Pow10(-n))
+		p, err := ipow10(-n)
+		if err != nil {
+			panic(err)
+		}
+		adj = adj * p
 		n = 0
 	}
 	return f0.Add(NewI(adj, uint(n)))
@@ -897,7 +943,11 @@ func (f Fixed) Floor(n int) Fixed {
 	}
 	adj := int64(-1)
 	if n < 0 {
-		adj = adj * int64(math.Pow10(-n))
+		p, err := ipow10(-n)
+		if err != nil {
+			panic(err)
+		}
+		adj = adj * p
 		n = 0
 	}
 	return f0.Add(NewI(adj, uint(n)))
