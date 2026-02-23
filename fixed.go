@@ -33,6 +33,40 @@ var ZERO = Fixed{fp: 0}
 var errTooLarge = errors.New("significand too large")
 var errFormat = errors.New("invalid encoding")
 
+var pow10table = [19]int64{
+	1,                   // 10^0
+	10,                  // 10^1
+	100,                 // 10^2
+	1000,                // 10^3
+	10000,               // 10^4
+	100000,              // 10^5
+	1000000,             // 10^6
+	10000000,            // 10^7
+	100000000,           // 10^8
+	1000000000,          // 10^9
+	10000000000,         // 10^10
+	100000000000,        // 10^11
+	1000000000000,       // 10^12
+	10000000000000,      // 10^13
+	100000000000000,     // 10^14
+	1000000000000000,    // 10^15
+	10000000000000000,   // 10^16
+	100000000000000000,  // 10^17
+	1000000000000000000, // 10^18
+}
+
+var errPow10Overflow = errors.New("pow10: exponent out of int64 range")
+
+func ipow10(n int) (int64, error) {
+	if n < 0 {
+		return 0, errPow10Overflow
+	}
+	if n > 18 {
+		return pow10table[18], errPow10Overflow
+	}
+	return pow10table[n], nil
+}
+
 // NewS creates a new Fixed from a string, returning NaN if the string could not be parsed
 func NewS(s string) Fixed {
 	f, _ := NewSErr(s)
@@ -131,11 +165,13 @@ func NewF(f float64) Fixed {
 // For example, NewI(123,1) becomes 12.3. If n > 7, the value is truncated
 func NewI(i int64, n uint) Fixed {
 	if n > nPlaces {
-		i = i / int64(math.Pow10(int(n-nPlaces)))
+		p, _ := ipow10(int(n - nPlaces))
+		i = i / p
 		n = nPlaces
 	}
 
-	i = i * int64(math.Pow10(int(nPlaces-n)))
+	p, _ := ipow10(int(nPlaces - n))
+	i = i * p
 
 	return Fixed{fp: i}
 }
@@ -250,30 +286,38 @@ func (f Fixed) Round(n int) Fixed {
 		return NaN
 	}
 
+	if n >= nPlaces {
+		return f
+	}
+
 	fraction := f.fp % scale
 	intpart := f.fp - fraction
 
 	if n >= 0 {
-		f0 := fraction / int64(math.Pow10(nPlaces-n-1))
+		p1, _ := ipow10(nPlaces - n - 1)
+		f0 := fraction / p1
 		digit := abs(f0 % 10)
 		f0 = (f0 / 10)
 		if digit >= 5 {
 			f0 += 1 * sign(f.fp)
 		}
-		f0 = f0 * int64(math.Pow10(nPlaces-n))
+		p2, _ := ipow10(nPlaces - n)
+		f0 = f0 * p2
 
 		fp := intpart + f0
 
 		return Fixed{fp: fp}
 
 	} else {
-		f0 := intpart / int64(math.Pow10(nPlaces-n-1))
+		p1, _ := ipow10(nPlaces - n - 1)
+		f0 := intpart / p1
 		digit := abs(f0 % 10)
 		f0 = (f0 / 10)
 		if digit >= 5 {
 			f0 += 1 * sign(f.fp)
 		}
-		f0 = f0 * int64(math.Pow10(nPlaces-n))
+		p2, _ := ipow10(nPlaces - n)
+		f0 = f0 * p2
 
 		return Fixed{fp: f0}
 	}
@@ -287,7 +331,8 @@ func (f Fixed) Ceil(n int) Fixed {
 	}
 	adj := int64(1)
 	if n < 0 {
-		adj = adj * int64(math.Pow10(-n))
+		p, _ := ipow10(-n)
+		adj = adj * p
 		n = 0
 	}
 	return f0.Add(NewI(adj, uint(n)))
@@ -301,7 +346,8 @@ func (f Fixed) Floor(n int) Fixed {
 	}
 	adj := int64(-1)
 	if n < 0 {
-		adj = adj * int64(math.Pow10(-n))
+		p, _ := ipow10(-n)
+		adj = adj * p
 		n = 0
 	}
 	return f0.Add(NewI(adj, uint(n)))
