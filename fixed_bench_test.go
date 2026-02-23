@@ -199,6 +199,14 @@ func BenchmarkStringBigFloat(b *testing.B) {
 	}
 }
 
+func BenchmarkMarshalJSONFixed(b *testing.B) {
+	f0 := NewF(123456789.12345)
+
+	for i := 0; i < b.N; i++ {
+		f0.MarshalJSON()
+	}
+}
+
 func BenchmarkNewFFixed(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		NewF(123456789.12345)

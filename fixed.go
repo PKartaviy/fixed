@@ -1064,21 +1064,42 @@ func (f Fixed) tostr() (string, int) {
 		absLo = -absLo
 	}
 
-	// Convert hi to string
-	hiStr := strconv.FormatInt(absHi, 10)
+	// Build string right-to-left in a stack-allocated buffer.
+	// Max length: '-' (1) + 18 integer digits + '.' (1) + 18 fractional digits = 38
+	var buf [40]byte
+	pos := len(buf)
 
-	// Convert lo to 18-digit string with leading zeros
-	loStr := fmt.Sprintf("%018d", absLo)
-
-	// Build result
-	result := hiStr + "." + loStr
-	pointPos := len(hiStr)
-	if negative {
-		result = "-" + result
-		pointPos++ // Adjust for the minus sign
+	// Write lo digits right-to-left (always nPlaces digits, zero-padded)
+	for i := 0; i < nPlaces; i++ {
+		pos--
+		buf[pos] = byte(absLo%10) + '0'
+		absLo /= 10
 	}
 
-	return result, pointPos
+	// Decimal point
+	pos--
+	buf[pos] = '.'
+	point := pos
+
+	// Write hi digits right-to-left
+	if absHi == 0 {
+		pos--
+		buf[pos] = '0'
+	} else {
+		for absHi > 0 {
+			pos--
+			buf[pos] = byte(absHi%10) + '0'
+			absHi /= 10
+		}
+	}
+
+	// Sign
+	if negative {
+		pos--
+		buf[pos] = '-'
+	}
+
+	return string(buf[pos:]), point - pos
 }
 
 func itoa(buf []byte, val int64) []byte {
